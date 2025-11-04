@@ -1,6 +1,6 @@
-// app.js (CommonJS)
-const express = require("express");
-const crypto = require("crypto");
+// app.js (ESM)
+import express from "express";
+import crypto from "crypto";
 
 const app = express();
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "changeme-verify-token";
