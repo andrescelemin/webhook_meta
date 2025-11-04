@@ -1,37 +1,39 @@
-// Import Express.js
-const express = require('express');
+// app.js (CommonJS)
+const express = require("express");
+const crypto = require("crypto");
 
-// Create an Express app
 const app = express();
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "changeme-verify-token";
+const APP_SECRET = process.env.APP_SECRET || "";
+const PORT = process.env.PORT || 3000;
 
-// Middleware to parse JSON bodies
-app.use(express.json());
+app.use(express.raw({ type: "*/*", limit: "2mb" }));
 
-// Set port and verify_token
-const port = process.env.PORT || 3000;
-const verifyToken = process.env.VERIFY_TOKEN;
+function validateSignature(req) {
+  if (!APP_SECRET) return true;
+  const signature = req.header("X-Hub-Signature-256");
+  if (!signature) return false;
+  const expected =
+    "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(req.body).digest("hex");
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
 
-// Route for GET requests
-app.get('/', (req, res) => {
-  const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } = req.query;
-
-  if (mode === 'subscribe' && token === verifyToken) {
-    console.log('WEBHOOK VERIFIED');
-    res.status(200).send(challenge);
-  } else {
-    res.status(403).end();
-  }
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === VERIFY_TOKEN) return res.status(200).send(challenge);
+  return res.sendStatus(403);
 });
 
-// Route for POST requests
-app.post('/', (req, res) => {
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  console.log(`\n\nWebhook received ${timestamp}\n`);
-  console.log(JSON.stringify(req.body, null, 2));
-  res.status(200).end();
+app.post("/webhook", (req, res) => {
+  if (!validateSignature(req)) return res.sendStatus(401);
+  let payload = {};
+  try { payload = JSON.parse(req.body.toString("utf8") || "{}"); } catch {}
+  console.log("[Webhook] Evento:", JSON.stringify(payload, null, 2));
+  res.sendStatus(200);
 });
 
-// Start the server
-app.listen(port, () => {
-  console.log(`\nListening on port ${port}\n`);
-});
+app.get("/", (_req, res) => res.status(200).send("OK - Meta Webhook up"));
+
+app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
