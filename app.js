@@ -1,37 +1,90 @@
-// Import Express.js
-const express = require('express');
+// app.js
+import express from "express";
+import crypto from "crypto";
 
-// Create an Express app
 const app = express();
 
-// Middleware to parse JSON bodies
-app.use(express.json());
+// --- Config ---
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "changeme-verify-token";
+const APP_SECRET = process.env.APP_SECRET || ""; // Opcional (para validar firma)
+const PORT = process.env.PORT || 3000;
 
-// Set port and verify_token
-const port = process.env.PORT || 3000;
-const verifyToken = process.env.VERIFY_TOKEN;
+// Necesitamos el body en RAW para validar la firma. Luego parseamos JSON manualmente.
+app.use(
+  express.raw({
+    type: "*/*",
+    limit: "2mb",
+  })
+);
 
-// Route for GET requests
-app.get('/', (req, res) => {
-  const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } = req.query;
+// --- Helpers ---
+function validateSignature(req) {
+  if (!APP_SECRET) return true; // si no seteas APP_SECRET, saltamos validación
+  const signature = req.header("X-Hub-Signature-256");
+  if (!signature) return false;
 
-  if (mode === 'subscribe' && token === verifyToken) {
-    console.log('WEBHOOK VERIFIED');
-    res.status(200).send(challenge);
+  // Firma: sha256=...
+  const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(req.body).digest("hex");
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+
+// --- GET /webhook (Verificación de Meta) ---
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("[Webhook] Verificado correctamente");
+    return res.status(200).send(challenge);
   } else {
-    res.status(403).end();
+    console.warn("[Webhook] Verificación fallida");
+    return res.sendStatus(403);
   }
 });
 
-// Route for POST requests
-app.post('/', (req, res) => {
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  console.log(`\n\nWebhook received ${timestamp}\n`);
-  console.log(JSON.stringify(req.body, null, 2));
-  res.status(200).end();
+// --- POST /webhook (Eventos de Meta) ---
+app.post("/webhook", (req, res) => {
+  // Valida firma si hay APP_SECRET
+  if (!validateSignature(req)) {
+    console.warn("[Webhook] Firma inválida");
+    return res.sendStatus(401);
+  }
+
+  // Intenta parsear body a JSON
+  let payload = {};
+  try {
+    payload = JSON.parse(req.body.toString("utf8") || "{}");
+  } catch (e) {
+    console.error("[Webhook] JSON inválido", e);
+  }
+
+  console.log("[Webhook] Evento recibido:", JSON.stringify(payload, null, 2));
+
+  // Responde 200 de inmediato para no reintentos
+  res.sendStatus(200);
+
+  // Aquí maneja tus casos (WhatsApp o Messenger)
+  // Ejemplo WhatsApp Business:
+  // payload.entry?.forEach(entry => {
+  //   entry.changes?.forEach(change => {
+  //     const value = change.value;
+  //     const messages = value.messages;
+  //     if (messages && messages.length) {
+  //       const msg = messages[0];
+  //       console.log("Mensaje entrante:", msg.from, msg.type, msg.text?.body);
+  //       // TODO: responder usando tu proveedor (Cloud API) si corresponde
+  //     }
+  //   });
+  // });
 });
 
-// Start the server
-app.listen(port, () => {
-  console.log(`\nListening on port ${port}\n`);
+// --- Healthcheck ---
+app.get("/", (_req, res) => {
+  res.status(200).send("OK - Meta Webhook up");
+});
+
+// --- Start ---
+app.listen(PORT, () => {
+  console.log(`Listening on port ${PORT}`);
 });
